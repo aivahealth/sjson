@@ -3,11 +3,15 @@ package sjson
 
 import (
 	jsongo "encoding/json"
+	"fmt"
 	"reflect"
 	"strconv"
 	"unsafe"
 
+	"github.com/golang/protobuf/proto"
 	"github.com/tidwall/gjson"
+
+	"github.com/golang/protobuf/jsonpb"
 )
 
 type errorType struct {
@@ -32,6 +36,11 @@ type Options struct {
 	// The Optimistic flag must be set to true and the input must be a
 	// byte slice in order to use this field.
 	ReplaceInPlace bool
+	// UseJsonpb is a hint to use the jsonpb package for JSON marshaling
+	// instead of the built-in Go json package. This is needed when working
+	// with Protobuf messages, as those mandate certain strict requirements
+	// when encoding/decoding JSON.
+	UseJsonpb bool
 }
 
 type pathResult struct {
@@ -583,19 +592,35 @@ func SetOptions(json, path string, value interface{},
 // SetOptions(string(data), path, value)
 func SetBytesOptions(json []byte, path string, value interface{},
 	opts *Options) ([]byte, error) {
-	var optimistic, inplace bool
+	var optimistic, inplace, usepb bool
 	if opts != nil {
 		optimistic = opts.Optimistic
 		inplace = opts.ReplaceInPlace
+		usepb = opts.UseJsonpb
 	}
 	jstr := *(*string)(unsafe.Pointer(&json))
 	var res []byte
 	var err error
 	switch v := value.(type) {
 	default:
-		b, merr := jsongo.Marshal(value)
-		if merr != nil {
-			return nil, merr
+		var b []byte
+		if usepb {
+			if pbValue, ok := value.(proto.Message); ok {
+				str, merr := (&jsonpb.Marshaler{}).MarshalToString(pbValue)
+				if merr != nil {
+					return nil, merr
+				}
+				b = []byte(str)
+			} else {
+				merr := fmt.Errorf("Not a proto.Message: %T", value)
+				return nil, merr
+			}
+		} else {
+			var merr error
+			b, merr = jsongo.Marshal(value)
+			if merr != nil {
+				return nil, merr
+			}
 		}
 		raw := *(*string)(unsafe.Pointer(&b))
 		res, err = set(jstr, path, raw, false, false, optimistic, inplace)
